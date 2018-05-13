@@ -1,0 +1,159 @@
+%%Purpose : Gestion d'un "badge" automatique pour les péages autoroutiers via le smartphone du client
+
+
+%% 1. Client -> Server : {Bonjour.C}_PKs
+
+%% (Server <--> BDD : get Pkc(C) )
+
+%% 2. Server -> Client : {Ns.Server}_PKc
+%% 3. Client -> Server : {Nc.Ns}_PKs
+%% 4. Server -> Client : {Nc.ClefSession}_PKc
+%% 5. Client -> Server : {IDSmartPhone}_ClefSession
+
+%% (Server <--> BDD : get solde(IDSmpartphone)
+%% if soldeClient > 0 ? ack
+%% else
+%% refuse)
+
+%% 6. Server -> Client : {Ack}_ClefSession
+%% 7. Client -> Server : {End}_ClefSession
+
+
+
+%% PKc, PKs respectivement les clefs publiques de Client et Serveur
+%% ClefSession une clef symétrique fraîche
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% définition du rôle client, initiant le protocole
+role client (Client, Server: agent,
+              PKc, PKs: public_key,
+              SND, RCV: channel(dy),
+              Bonjour, Ack, IDSmartPhone : text)
+
+
+played_by Client def=
+  local State: nat,
+          Nc, Ns: text,
+          ClefSession: symmetric_key
+
+  init State:=0
+
+  transition
+
+  0.  State=0 /\ RCV(start) =|>
+	State':=1 /\ SND({Bonjour.Client}_PKs)
+
+  1. State=1 /\ RCV({Ns'.Server}_PKc) =|>
+	State':=2 /\ Nc':=new() /\ secret(Nc', nc, {Client, Server}) /\ SND({Nc'.Ns'}_PKs) /\ witness(Client, Server, server_client_nc, Nc')
+
+  2. State=2 /\ RCV({Nc.ClefSession'}_PKc)=|>
+  State':=3 /\ secret(IDSmartPhone, idsmart, {Client, Server}) /\ SND({IDSmartPhone}_ClefSession')
+
+  3. State=3 /\ RCV({Ack}_ClefSession)=|>
+  State':=4 /\ request(Client, Server, client_server_ns, Ns)
+
+end role
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% définition du rôle server
+role server (Server: agent,
+              PKs: public_key,
+              SND, RCV: channel(dy),
+			        Ack, Bonjour: text,
+			        Database_users: (agent.public_key) set,
+			        Database_solde: (text.nat) set)
+
+
+played_by Server def=
+  local State, SoldeClient: nat,
+          ClefSession: symmetric_key,
+        	Ns,Nc, IDSmartPhone: text,
+        	PKc: public_key,
+			Client: agent
+
+  init State:=0
+
+  transition
+
+  0. State=0 /\ RCV({Bonjour.Client'}_PKs) /\ in(Client'.PKc', Database_users) =|>
+	State':=1 /\ Ns':=new() /\ secret(Ns', ns, {Client', Server}) /\ witness(Client', Server, client_server_ns, Ns') /\ SND({Ns'.Server}_PKc')
+
+  1. State=1 /\ RCV({Nc'.Ns}_PKs) =|>
+  State':=2 /\ ClefSession':=new() /\ secret(ClefSession', clefsession, {Client, Server}) /\ SND({Nc'.ClefSession'}_PKc)
+
+  2. State=2 /\ RCV({IDSmartPhone'}_ClefSession) /\ in(IDSmartPhone'.SoldeClient', Database_solde) /\ not(SoldeClient=0) =|>
+  State':=3 /\ SND({Ack}_ClefSession) /\ request(Client, Server, server_client_nc, Nc)
+
+end role
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% définition du rôle caractérisant une session
+role session(Client,
+              Server: agent,
+              PKc, PKs: public_key,
+              Bonjour, Ack, IDSmartPhone: text,
+              Database_users: (agent.public_key) set,
+              Database_solde: (text.nat) set) def=
+
+  local Sc, Rc, Ss, Rs: channel(dy)
+
+  composition
+
+	client(Client, Server, PKc, PKs, Sc, Rc, Bonjour, Ack, IDSmartPhone)
+     /\ server(Server, PKs, Ss, Rs, Ack, Bonjour, Database_users, Database_solde)
+
+end role
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% définition du rôle caractérisant le scenario à exécuter
+role environment() def=
+
+  local
+    Database_users: (agent.public_key) set,
+    Database_solde: (text.nat) set
+
+  const
+    a1, a2, b: agent,
+    pk1, pk2, pkb, pki: public_key,
+    bonjour, ack, idsmartphone1, idsmartphone2, idsmartphonei: text,
+    solde1, solde2, soldei: nat,
+    idsmart, clefsession, ns, nc, client_server_ns, server_client_nc: protocol_id
+
+
+  init Database_users:={a1.pk1, a2.pk2, i.pki}
+      /\ Database_solde:={idsmartphone1.solde1, idsmartphone2.solde2, idsmartphonei.soldei}
+
+  intruder_knowledge = {a1, a2, b, pk1, pk2, pkb, pki, inv(pki), idsmartphonei, soldei }
+
+  composition
+
+	session(a1, b, pk1, pkb, bonjour, ack, idsmartphone1, database_user, database_solde)
+    /\ session(a2, i, pk2, pki, bonjour, ack, idsmartphone2, database_user, database_solde)
+	/\ session(a1, i, pk1, pki, bonjour, ack, idsmartphone1, database_user, database_solde)
+	/\ session(i, b, pki, pkb, bonjour, ack, idsmartphonei, database_user, database_solde)
+	/\ session(a2, b, pk2, pkb, bonjour, ack, idsmartphone1, database_user, database_solde)
+	/\ session(a2, i, pk2, pki, bonjour, ack, idsmartphone2, database_user, database_solde)
+	/\ session(a1, i, pk1, pki, bonjour, ack, idsmartphone1, database_user, database_solde)
+	/\ session(i, b, pki, pkb, bonjour, ack, idsmartphonei, database_user, database_solde)
+
+end role
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% GOAL section
+
+goal
+  authentication_on client_server_ns
+  authentication_on server_client_nc
+
+  secrecy_of ns,
+              nc,
+              clefsession,
+              idsmart
+end goal
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% lancement du rôle principal
+environment()
